@@ -298,11 +298,12 @@ void *main_continued(void *arg)
         }
     }
 
-    printf("JSON OUTPUT\n");
-    error = json_dumpf(output, stdout, JSON_PRESERVE_ORDER | JSON_INDENT(CONFIG_JSON_INDENT));
-    ZF_LOGF_IF(error, "Failed to dump output");
-
-    printf("END JSON OUTPUT\n");
+    if (json_array_size(output) > 0) {
+        printf("JSON OUTPUT\n");
+        error = json_dumpf(output, stdout, JSON_PRESERVE_ORDER | JSON_INDENT(CONFIG_JSON_INDENT));
+        ZF_LOGF_IF(error, "Failed to dump output");
+        printf("END JSON OUTPUT\n");
+    }
     printf("All is well in the universe.\n");
     printf("\n\nFin\n");
 

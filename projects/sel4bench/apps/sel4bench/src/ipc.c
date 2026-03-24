@@ -10,7 +10,6 @@
 #include <utils/util.h>
 
 #include "benchmark.h"
-#include "json.h"
 #include "math.h"
 #include "printing.h"
 #include "processing.h"
@@ -42,77 +41,28 @@ static json_t *process_ipc_results(void *r)
     }
 
     int n = ARRAY_SIZE(benchmark_params);
-    char *functions[n];
-    char *directions[n];
-    json_int_t client_prios[n];
-    json_int_t server_prios[n];
-    bool same_vspace[n];
-    json_int_t length[n];
 
-    column_t extra_cols[] = {
-        {
-            .header = "Function",
-            .type = JSON_STRING,
-            .string_array = &functions[0]
-        },
-        {
-            .header = "Direction",
-            .type = JSON_STRING,
-            .string_array = &directions[0],
-        },
-        {
-            .header = "Client Prio",
-            .type = JSON_INTEGER,
-            .integer_array = &client_prios[0]
-        },
-        {
-            .header = "Server Prio",
-            .type = JSON_INTEGER,
-            .integer_array = &server_prios[0]
-        },
-        {
-            .header = "Same vspace?",
-            .type = JSON_TRUE,
-            .bool_array = &same_vspace[0]
-        },
-        {
-            .header = "IPC length",
-            .type = JSON_INTEGER,
-            .integer_array = &length[0]
-        }
-    };
-
-    result_t results[n];
-
-    result_set_t result_set = {
-        .name = "One way IPC microbenchmarks",
-        .extra_cols = extra_cols,
-        .n_extra_cols = ARRAY_SIZE(extra_cols),
-        .results = results,
-        .n_results = n,
-    };
-
-    /* now calculate the results */
+    printf("function,direction,same_vspace,length,avg_cycles,std_cycles,n\n");
     for (int i = 0; i < n; i++) {
         result_desc_t desc = {
             .name = benchmark_params[i].name,
             .overhead = overheads[benchmark_params[i].overhead_id],
         };
+        result_t result = process_result(RUNS, raw_results->benchmarks[i], desc);
+        const char *direction = benchmark_params[i].direction == DIR_TO ? "client->server" :
+                                "server->client";
 
-        functions[i] = (char *) benchmark_params[i].name;
-        directions[i] = benchmark_params[i].direction == DIR_TO ? "client->server" :
-                        "server->client";
-        client_prios[i] = benchmark_params[i].client_prio;
-        server_prios[i] = benchmark_params[i].server_prio;
-        same_vspace[i] = benchmark_params[i].same_vspace;
-        length[i] = benchmark_params[i].length;
-
-        results[i] = process_result(RUNS, raw_results->benchmarks[i], desc);
+        printf("%s,%s,%s,%u,%.2f,%.2f,%zu\n",
+               benchmark_params[i].name,
+               direction,
+               benchmark_params[i].same_vspace ? "yes" : "no",
+               benchmark_params[i].length,
+               result.mean,
+               result.stddev,
+               result.samples);
     }
 
-    json_t *array = json_array();
-    json_array_append_new(array, result_set_to_json(result_set));
-    return array;
+    return json_array();
 }
 
 static benchmark_t ipc_benchmark = {

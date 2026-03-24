@@ -9,7 +9,7 @@
 #include <sel4utils/process.h>
 
 #define OVERHEAD_BENCH_PARAMS(n) { .name = n }
-#define RUNS 16
+#define RUNS 128
 
 enum overheads {
     CALL_OVERHEAD,
