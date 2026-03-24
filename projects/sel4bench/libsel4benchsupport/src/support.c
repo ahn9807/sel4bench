@@ -17,6 +17,8 @@
 #include <sel4utils/helpers.h>
 #include <sel4utils/process.h>
 #include <serial_server/client.h>
+#include <platsupport/chardev.h>
+#include <platsupport/plat/serial.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -63,12 +65,22 @@ ccnt_t getMinOverhead(ccnt_t *overhead, seL4_Word overhead_size)
     return min;
 }
 
-/* serial server */
+/* console output */
 static serial_client_context_t context;
+static ps_chardevice_t vga_console;
+static bool vga_console_ready;
+static bool serial_console_ready;
 
 size_t benchmark_write(void *data, size_t count)
 {
-    return (size_t) serial_server_write(&context, data, count);
+    if (vga_console_ready) {
+        ssize_t written = ps_cdev_write(&vga_console, data, count, NULL, NULL);
+        return written > 0 ? (size_t) written : 0;
+    }
+    if (serial_console_ready) {
+        return (size_t) serial_server_write(&context, data, count);
+    }
+    return 0;
 }
 
 static void parse_code_region(sel4utils_elf_region_t *region)
@@ -533,8 +545,10 @@ NORETURN void benchmark_finished(int exit_code)
         ltimer_destroy(&env.ltimer);
     }
 
-    /* stop the serial */
-    serial_server_disconnect(&context);
+    /* stop the serial if we initialised it */
+    if (serial_console_ready) {
+        serial_server_disconnect(&context);
+    }
 
     /* send back exit code */
     seL4_MessageInfo_t info = seL4_MessageInfo_new(seL4_Fault_NullFault, 0, 0, 1);
@@ -572,6 +586,7 @@ env_t *benchmark_get_env(int argc, char **argv, size_t results_size,
     }
 
     env.args = (void *) atol(argv[0]);
+    int error;
     env.results = env.args->results;
     init_simple(&env);
 
@@ -582,9 +597,8 @@ env_t *benchmark_get_env(int argc, char **argv, size_t results_size,
     init_allocator_vspace(env.allocman, &env.vspace);
     parse_code_region(&env.region);
 
-    /* set up serial */
-    int error = serial_server_client_connect(env.args->serial_ep, &env.delegate_vka, &env.vspace, &context);
-    ZF_LOGF_IF(error, "Failed to set up serial");
+    /* disable boot-time serial server connection attempt */
+    serial_console_ready = false;
 
     /* update object freq for timer objects */
     object_freq[seL4_NotificationObject]++;
@@ -605,6 +619,10 @@ env_t *benchmark_get_env(int argc, char **argv, size_t results_size,
 
     error = sel4platsupport_new_io_mapper(&env.vspace, &env.slab_vka, &env.io_ops.io_mapper);
     ZF_LOGF_IF(error, "Failed to setup the IO mapper");
+
+#if defined(CONFIG_ARCH_X86)
+    vga_console_ready = ps_cdev_init(PC99_TEXT_EGA, &env.io_ops, &vga_console) != NULL;
+#endif
 
     if (env.args->fdt) {
         /* manually setup the fdt interface */

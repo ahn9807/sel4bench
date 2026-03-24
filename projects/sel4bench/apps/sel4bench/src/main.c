@@ -13,12 +13,15 @@
 #include <assert.h>
 
 #include <sel4runtime.h>
+#include <arch_stdio.h>
 
 #include <simple/simple.h>
 #include <simple-default/simple-default.h>
 
 #include <sel4debug/register_dump.h>
 #include <serial_server/parent.h>
+#include <platsupport/chardev.h>
+#include <platsupport/plat/serial.h>
 #include <sel4platsupport/device.h>
 #include <sel4platsupport/platsupport.h>
 #include <sel4platsupport/timer.h>
@@ -52,6 +55,21 @@ static sel4utils_alloc_data_t data;
 
 /* environment for the benchmark runner, set up in main() */
 static env_t global_env;
+
+#if defined(CONFIG_ARCH_X86)
+static ps_chardevice_t root_vga_console;
+static bool root_vga_console_ready;
+
+static size_t root_vga_write(void *data, size_t count)
+{
+    if (!root_vga_console_ready) {
+        return 0;
+    }
+
+    ssize_t written = ps_cdev_write(&root_vga_console, data, count, NULL, NULL);
+    return written > 0 ? (size_t) written : 0;
+}
+#endif
 
 static void setup_fault_handler(env_t *env)
 {
@@ -119,9 +137,13 @@ int run_benchmark(env_t *env, benchmark_t *benchmark, void *local_results_vaddr,
         }
     }
 
-    /* copy serial to process */
+    /* x86 uses VGA console directly, so child processes do not need a serial endpoint. */
+#if defined(CONFIG_ARCH_X86)
+    args->serial_ep = 0;
+#else
     args->serial_ep = serial_server_parent_mint_endpoint_to_process(&process);
     ZF_LOGF_IF(args->serial_ep == 0, "Failed to copy rpc serial ep to process");
+#endif
 
     /* copy untyped to process */
     args->untyped_cptr = sel4utils_copy_cap_to_process(&process, &env->vka, env->untyped.cptr);
@@ -363,12 +385,23 @@ int main(void)
     assert(virtual_reservation.res);
     bootstrap_configure_virtual_pool(allocman, vaddr, ALLOCATOR_VIRTUAL_POOL_SIZE, simple_get_pd(&global_env.simple));
 
-    /* init serial */
+    /* Configure console output. On x86 RELEASE builds we want VGA-only output. */
+#if defined(CONFIG_ARCH_X86)
+    error = sel4platsupport_new_malloc_ops(&global_env.ops.malloc_ops);
+    ZF_LOGF_IF(error, "Failed to get malloc_ops");
+    error = sel4platsupport_new_io_mapper(&global_env.vspace, &global_env.vka, &global_env.ops.io_mapper);
+    ZF_LOGF_IF(error, "Failed to setup the IO mapper");
+    root_vga_console_ready = ps_cdev_init(PC99_TEXT_EGA, &global_env.ops, &root_vga_console) != NULL;
+    ZF_LOGF_IF(!root_vga_console_ready, "Failed to initialise VGA console");
+    register_console(&root_vga_console);
+    sel4muslcsys_register_stdio_write_fn(root_vga_write);
+#else
     platsupport_serial_setup_simple(&global_env.vspace, &global_env.simple, &global_env.vka);
 
     error = serial_server_parent_spawn_thread(&global_env.simple, &global_env.vka,
                                               &global_env.vspace, seL4_MaxPrio);
     ZF_LOGF_IF(error, "Failed to start serial server");
+#endif
 
     if (config_set(CONFIG_ARCH_ARM)) {
         /* initialise the FDT interface while we have access to the bootinfo */
